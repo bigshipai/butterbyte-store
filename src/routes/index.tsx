@@ -32,6 +32,7 @@ import catMensShorts from "@/assets/cat-mens-shorts.jpg";
 import catSuit from "@/assets/cat-suit.jpg";
 
 export const Route = createFileRoute("/")({
+  loader: () => getHomeData(),
   head: () => ({
     meta: [
       { title: "BUTTERBYTE STORE — Modern Indian Fashion" },
@@ -64,7 +65,7 @@ const CAT_IMG: Record<string, string> = {
 };
 
 function Home() {
-  const { data } = useQuery({ queryKey: ["home"], queryFn: () => getHomeData() });
+  const data = Route.useLoaderData();
 
   return (
     <div className="min-h-screen flex flex-col">

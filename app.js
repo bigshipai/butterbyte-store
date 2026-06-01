@@ -1,11 +1,50 @@
 import http from 'node:http';
 import process from 'node:process';
-import { createReadStream, statSync } from 'node:fs';
+import { createReadStream, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientDir = join(__dirname, 'dist', 'client');
+
+// Load .env file (native, no dotenv dependency needed)
+try {
+  const envPath = join(__dirname, '.env');
+  readFileSync(envPath, 'utf-8')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .forEach(line => {
+      const eqIdx = line.indexOf('=');
+      if (eqIdx === -1) return;
+      const key = line.slice(0, eqIdx).trim();
+      let val = line.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (!(key in process.env)) {
+        process.env[key] = val;
+      }
+    });
+} catch { /* .env not found, skip */ }
+
+// Load catalog module for debugging
+const assetsDir = join(__dirname, 'dist', 'server', 'assets');
+const catalogFile = readdirSync(assetsDir).find(f => f.startsWith('catalog.functions-'));
+if (catalogFile) {
+  try {
+    const catalogModule = await import(pathToFileURL(join(assetsDir, catalogFile)));
+    const handler = catalogModule.getHomeData_createServerFn_handler;
+    if (handler) {
+      try {
+        const result = await handler();
+        console.log('[CATALOG] womenTops:', result.womenTops?.length, 'menNew:', result.menNewArrivals?.length, 'menBest:', result.menBestSellers?.length);
+      } catch (e) {
+        // Expected: No Start context - this is fine
+      }
+    }
+  } catch { /* skip */ }
+}
 
 const server = await import(pathToFileURL(join(__dirname, 'dist', 'server', 'server.js'))).then(m => m.default);
 
