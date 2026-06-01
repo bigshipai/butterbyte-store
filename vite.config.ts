@@ -12,4 +12,9 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Cloudflare Workers preset — Nitro builds the SSR server entry + static
+  // assets into dist/server/ and dist/client/, which we deploy via Wrangler.
+  nitro: {
+    preset: "cloudflare_pages",
+  },
 });

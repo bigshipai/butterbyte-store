@@ -1,6 +1,6 @@
 # BUTTERBYTE STORE
 
-A premium fashion e-commerce storefront built with **TanStack Start (React 19 + Vite 7)**, **Tailwind CSS v4**, and a managed **Supabase** backend (Lovable Cloud).
+A premium fashion e-commerce storefront built with **TanStack Start (React 19 + Vite 7)**, **Tailwind CSS v4**, and a managed **Supabase** backend (Lovable Cloud). Deployed on **Cloudflare Pages** (SSR runs on Workers).
 
 ---
 
@@ -14,14 +14,15 @@ A premium fashion e-commerce storefront built with **TanStack Start (React 19 + 
 | UI Kit       | shadcn/ui + Radix primitives                            |
 | State        | Zustand (cart/wishlist) + TanStack Query                |
 | Backend      | Supabase (Postgres + Auth + RLS)                        |
-| Server-side  | TanStack `createServerFn` (no Edge Functions)           |
+| Server       | Nitro (SSR) on **Cloudflare Pages** (Workers runtime)    |
+| Server-side  | TanStack `createServerFn`                               |
 | Animations   | Framer Motion                                           |
 
 ---
 
 ## 2. Prerequisites
 
-- **Node.js ≥ 20** and **Bun ≥ 1.1** (recommended) or npm
+- **Node.js ≥ 22** and **pnpm ≥ 10** (or Bun ≥ 1.1 / npm)
 - A **Supabase** project (free tier is fine) — or use Lovable Cloud
 - `psql` (PostgreSQL client) for importing the SQL dump
 
@@ -31,7 +32,7 @@ A premium fashion e-commerce storefront built with **TanStack Start (React 19 + 
 
 ```bash
 # 1. Install dependencies
-bun install            # or: npm install
+pnpm install           # or: bun install / npm install
 
 # 2. Configure environment variables — create .env in project root
 cp .env.example .env   # then edit with your Supabase credentials
@@ -51,14 +52,15 @@ cp .env.example .env   # then edit with your Supabase credentials
 ### Run locally
 
 ```bash
-bun run dev            # starts Vite dev server on http://localhost:8080
+pnpm dev               # starts Vite dev server on http://localhost:8080
 ```
 
 ### Production build
 
 ```bash
-bun run build
-bun run start          # serves the built output
+pnpm build
+pnpm deploy            # deploy to Cloudflare Workers
+# or: pnpx wrangler deploy
 ```
 
 ---
@@ -214,19 +216,93 @@ database/                    # Full DB export (this delivery)
 ├── schema.sql
 ├── seed.sql
 └── csv/
+
+wrangler.toml                # Cloudflare Workers deployment config
+.github/workflows/           # GitHub Actions CI/CD
+└── workers-deploy.yml       # Auto-deploy on push to cf-dev
 ```
 
 ---
 
-## 9. Deployment
+## 9. Deploying to Cloudflare Pages (with Workers SSR)
 
-The app builds for **Cloudflare Workers / edge runtimes** by default (via TanStack Start's Vite plugin).
+### Architecture
+
+This project uses **TanStack Start** with **Nitro** (server engine) targeting **Cloudflare**:
+
+- `vite build` → Nitro bundles SSR into `dist/server/index.js` (a Cloudflare Worker) + static assets into `dist/client/`
+- `dist/_routes.json` → Pages routing config (all requests → Worker, static assets excluded)
+- The SSR server runs as a **Cloudflare Worker** under the Pages runtime — same edge network, same performance
+
+### Prerequisites
+
+- **Node.js ≥ 22** and **pnpm ≥ 10** (or Bun/npm)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/): `pnpm add -g wrangler`
+- A [Cloudflare](https://dash.cloudflare.com/) account
+- A running [Supabase](https://supabase.com/) project (free tier works)
+
+### Step 1: Install & Configure
 
 ```bash
-bun run build       # output → .output/
+pnpm install
+cp .env.example .env
+# Edit .env with your Supabase credentials
 ```
 
-Deploy `.output/` to Cloudflare Pages/Workers, Vercel (edge), Netlify, or any Node host. Set all environment variables from §3 in your hosting provider.
+### Step 2: Deploy via Wrangler CLI
+
+```bash
+wrangler login          # authenticate with Cloudflare
+pnpm build              # build → dist/
+pnpm deploy             # deploys to Cloudflare Pages
+```
+
+Your app will be live at `https://butterbyte-store.pages.dev`.
+
+### Step 3: Set Environment Variables
+
+Set these in the Cloudflare Pages dashboard → butterbyte-store → Settings → Environment variables:
+
+| Variable | Type | Value |
+|----------|------|-------|
+| `VITE_SUPABASE_PROJECT_ID` | Build | Your Supabase project ID |
+| `VITE_SUPABASE_URL` | Build | `https://YOUR_ID.supabase.co` |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Build | Your Supabase anon key |
+| `NODE_ENV` | Runtime | `production` |
+
+For secrets (like `SUPABASE_SERVICE_ROLE_KEY`):
+
+```bash
+wrangler pages secret put SUPABASE_SERVICE_ROLE_KEY
+```
+
+### Step 4: CI/CD via GitHub Actions (Optional)
+
+Push to `cf-dev` branch to auto-deploy. Set these in your GitHub repo:
+
+**Secrets** (Settings → Secrets and variables → Actions):
+| Secret | Value |
+|--------|-------|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Pages:Edit |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+
+**Variables**:
+| Variable | Value |
+|----------|-------|
+| `VITE_SUPABASE_PROJECT_ID` | Your Supabase project ID |
+| `VITE_SUPABASE_URL` | Supabase project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase anon key |
+
+### Step 5: Local Preview
+
+```bash
+pnpm build
+pnpm dev:worker        # runs wrangler pages dev locally
+```
+
+### Step 6: Custom Domain (Optional)
+
+In the Pages dashboard → butterbyte-store → Custom domains, bind your own domain.
 
 ---
 
