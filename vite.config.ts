@@ -12,4 +12,9 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Force-enable Nitro with Cloudflare Pages preset (default is cloudflare-module Workers,
+  // and Nitro only runs in Lovable contexts unless explicitly enabled).
+  nitro: {
+    preset: "cloudflare_pages",
+  },
 });
