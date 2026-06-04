@@ -42,7 +42,11 @@ export const Route = createFileRoute("/upi-pay")({
   head: () => ({
     meta: [{ title: "Complete UPI Payment — BUTTERBYTE STORE" }],
   }),
-  component: UpiPayPage,
+ 
+  component: function UpiPayRoute() {
+    const { mid } = Route.useSearch();
+    return <UpiPayPage key={mid} />;
+  },
 });
 
 type Phase = "loading" | "waiting" | "checking" | "paid" | "expired" | "error";
@@ -92,11 +96,13 @@ function UpiPayPage() {
 
   }, []);
 
+  // Start timers once when the session is loaded. Depending on [session] (not
+  // [phase]) is intentional: if we depended on phase, every setPhase("checking")
+  // call would trigger the cleanup and clear both intervals permanently.
   useEffect(() => {
-    if (phase !== "waiting" || startedRef.current) return;
+    if (!session || startedRef.current) return;
     startedRef.current = true;
 
- 
     const cdTimer = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
@@ -113,9 +119,8 @@ function UpiPayPage() {
       });
     }, 1000);
 
-    // Polling
     const poll = async () => {
-      if (doneRef.current || !session) return;
+      if (doneRef.current) return;
 
       setPhase("checking");
       setCheckCount((c) => c + 1);
@@ -156,14 +161,14 @@ function UpiPayPage() {
     };
 
     poll();
-    const pollTimer = setInterval(poll, 2000);
+    const pollTimer = setInterval(poll, 5000);
 
     return () => {
       clearInterval(cdTimer);
       clearInterval(pollTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [session]);
 
   const mins   = Math.floor(timeLeft / 60);
   const secs   = timeLeft % 60;
