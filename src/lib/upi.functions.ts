@@ -179,26 +179,26 @@ export const initiateUpiPayment = createServerFn({ method: "POST" })
     };
   });
 
-// ---------------------------------------------------------------------------
-// checkUpiPaymentStatus
-// Polls the gateway for the current order status.
-// When PAID, re-validates prices and creates the real order in Supabase.
-// The cart snapshot is passed in by the client (stored in sessionStorage);
-// prices are always re-fetched from the database for security.
-// ---------------------------------------------------------------------------
 
 export const checkUpiPaymentStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z
-      .object({
-        merchantOrderId: z.string().min(1).max(80),
-        // Cart snapshot — only used when the payment is confirmed PAID.
-        items:   z.array(OrderItemSchema).min(1).max(50),
-        address: AddressSchema,
-      })
-      .parse(input),
-  )
+  .inputValidator((input: unknown) => {
+    const schema = z.object({
+      merchantOrderId: z.string().min(1).max(80),
+      // Cart snapshot — only used when the payment is confirmed PAID.
+      items:   z.array(OrderItemSchema).min(1).max(50),
+      address: AddressSchema,
+    });
+    const result = schema.safeParse(input);
+    if (!result.success) {
+      console.error(
+        "[checkUpiPaymentStatus] Input validation failed:",
+        JSON.stringify(result.error.issues, null, 2),
+      );
+      throw result.error;
+    }
+    return result.data;
+  })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const cfg = getUpiConfig();
@@ -210,31 +210,60 @@ export const checkUpiPaymentStatus = createServerFn({ method: "POST" })
 
     const sign = generateSignature(queryParams, cfg.signKey);
 
-    const apiRes = await fetch(cfg.statusUrl, {
-      method:  "POST",
-      headers: {
-        sign,
-        "Content-Type": "application/json",
-        "User-Agent":   "ButterbyteStore-UPI/1.0",
-      },
-      body: JSON.stringify(queryParams),
-    });
+    let apiRes: Response;
+    try {
+      apiRes = await fetch(cfg.statusUrl, {
+        method:  "POST",
+        headers: {
+          sign,
+          "Content-Type": "application/json",
+          "User-Agent":   "ButterbyteStore-UPI/1.0",
+        },
+        body: JSON.stringify(queryParams),
+      });
+    } catch (err) {
+      console.error("[checkUpiPaymentStatus] Network error fetching status:", err);
+      return { status: "PENDING" as const };
+    }
 
-    if (!apiRes.ok) return { status: "PENDING" as const };
+    if (!apiRes.ok) {
+      console.warn("[checkUpiPaymentStatus] Gateway returned non-OK status:", apiRes.status);
+      return { status: "PENDING" as const };
+    }
 
     type StatusBody = {
       code:  string;
-      data?: { orderStatus?: string; transactionId?: string; orderId?: string };
+      data?: Record<string, unknown>;
     };
 
     const body = (await apiRes.json()) as StatusBody;
 
+    // 打印完整响应，方便排查字段名/状态值
+    console.log("[checkUpiPaymentStatus] Gateway raw response:", JSON.stringify(body, null, 2));
+
     if (body.code !== "0000") return { status: "PENDING" as const };
 
-    const orderStatus   = body.data?.orderStatus ?? "PENDING";
-    const transactionId = body.data?.transactionId ?? body.data?.orderId ?? "";
+    // 兼容多种字段名：orderStatus / status / payStatus / order_status
+    const rawData = body.data as Record<string, unknown> | undefined;
+    const orderStatus: string =
+      (rawData?.orderStatus as string) ??
+      (rawData?.status as string) ??
+      (rawData?.payStatus as string) ??
+      (rawData?.order_status as string) ??
+      "PENDING";
 
-    if (orderStatus !== "PAID") {
+    const transactionId =
+      (rawData?.transactionId as string) ??
+      (rawData?.transaction_id as string) ??
+      (rawData?.orderId as string) ??
+      "";
+
+    console.log("[checkUpiPaymentStatus] Resolved orderStatus:", orderStatus, "transactionId:", transactionId);
+
+    // 兼容 PAID / SUCCESS / paid / success
+    const isPaid = /^(PAID|SUCCESS|paid|success)$/i.test(orderStatus);
+
+    if (!isPaid) {
       return { status: orderStatus as "PENDING" | "FAIL" };
     }
 
