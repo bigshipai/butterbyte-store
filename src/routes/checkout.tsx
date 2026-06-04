@@ -7,6 +7,8 @@ import { inr } from "@/lib/format";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/use-auth";
 import { createOrder } from "@/lib/orders.functions";
+import { initiateUpiPayment } from "@/lib/upi.functions";
+import { UPI_SESSION_KEY, type UpiSession } from "@/routes/upi-pay";
 
 export const Route = createFileRoute("/checkout")({
   head: () => ({ meta: [{ title: "Checkout — BUTTERBYTE STORE" }] }),
@@ -30,6 +32,7 @@ function Checkout() {
   const subtotal = cartItems.reduce((s, l) => s + l.price * l.qty, 0);
   const shipping = subtotal >= 999 || subtotal === 0 ? 0 : 79;
   const total = subtotal + shipping;
+  const [paymentMethod, setPaymentMethod] = useState<"cod" | "upi">("cod");
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
@@ -124,28 +127,53 @@ function Checkout() {
 
     submittingRef.current = true;
     setSubmitting(true);
+
+    const orderItems = cartItems.map((l) => ({
+      product_id: l.productId,
+      name:       l.name,
+      sku:        l.size ? `${l.slug}-${l.size}` : l.slug,
+      price:      l.price,
+      qty:        l.qty,
+      image_url:  l.image,
+    }));
+
+    const address = {
+      firstName: firstName.trim(),
+      lastName:  lastName.trim(),
+      email:     email.trim(),
+      phone,
+      line1:     line1.trim(),
+      line2:     line2.trim() || null,
+      pincode,
+      city,
+      state,
+    };
+
     try {
+      if (paymentMethod === "upi") {
+        const res = await initiateUpiPayment({
+          data: { items: orderItems, address },
+        });
+
+        const session: UpiSession = {
+          merchantOrderId: res.merchantOrderId,
+          paymentLink:     res.paymentLink,
+          amount:          res.amount,
+          timeoutMins:     res.timeoutMins,
+          expiresAt:       Date.now() + res.timeoutMins * 60 * 1000,
+          items:           res.pricedItems,
+          address:         { ...address, line2: address.line2 ?? null },
+        };
+        sessionStorage.setItem(UPI_SESSION_KEY, JSON.stringify(session));
+
+        navigate({ to: "/upi-pay", search: { mid: res.merchantOrderId } as never });
+        return;
+      }
+
       const { order_no } = await createOrder({
         data: {
-          items: cartItems.map((l) => ({
-            product_id: l.productId,
-            name: l.name,
-            sku: l.size ? `${l.slug}-${l.size}` : l.slug,
-            price: l.price,
-            qty: l.qty,
-            image_url: l.image,
-          })),
-          address: {
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            email: email.trim(),
-            phone,
-            line1: line1.trim(),
-            line2: line2.trim() || null,
-            pincode,
-            city,
-            state,
-          },
+          items:          orderItems,
+          address,
           subtotal,
           shipping,
           total,
@@ -220,11 +248,42 @@ function Checkout() {
               </div>
             </Section>
             <Section title="Payment">
-              <label className="flex items-start gap-3 border p-4 cursor-pointer">
-                <input type="radio" defaultChecked name="pm" className="mt-1" />
+              <label
+                className={`flex items-start gap-3 border p-4 cursor-pointer transition-colors ${
+                  paymentMethod === "cod" ? "border-foreground" : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="pm"
+                  className="mt-1"
+                  checked={paymentMethod === "cod"}
+                  onChange={() => setPaymentMethod("cod")}
+                />
                 <div>
                   <div className="text-sm font-medium">Cash on Delivery</div>
-                  <div className="text-xs text-muted-foreground">Pay when your order arrives. Online payments coming soon.</div>
+                  <div className="text-xs text-muted-foreground">
+                    Pay when your order arrives.
+                  </div>
+                </div>
+              </label>
+              <label
+                className={`flex items-start gap-3 border p-4 cursor-pointer transition-colors ${
+                  paymentMethod === "upi" ? "border-foreground" : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="pm"
+                  className="mt-1"
+                  checked={paymentMethod === "upi"}
+                  onChange={() => setPaymentMethod("upi")}
+                />
+                <div>
+                  <div className="text-sm font-medium">UPI</div>
+                  <div className="text-xs text-muted-foreground">
+                    Pay instantly via Google Pay, PhonePe, Paytm or any UPI app.
+                  </div>
                 </div>
               </label>
             </Section>
@@ -241,7 +300,13 @@ function Checkout() {
             <div className="flex justify-between"><span className="text-muted-foreground">Shipping</span><span>{shipping === 0 ? "Free" : inr(shipping)}</span></div>
             <div className="flex justify-between border-t pt-3 text-base font-semibold"><span>Total</span><span>{inr(total)}</span></div>
             <button disabled={submitting || pinLoading} type="submit" className="block w-full text-center bg-foreground text-background py-3 text-sm uppercase tracking-[0.2em] mt-4 hover:bg-[oklch(0.78_0.13_85)] hover:text-black transition disabled:opacity-60">
-              {submitting ? "Placing order…" : "Place Order"}
+              {submitting
+                ? paymentMethod === "upi"
+                  ? "Initiating payment…"
+                  : "Placing order…"
+                : paymentMethod === "upi"
+                ? "Pay with UPI"
+                : "Place Order"}
             </button>
             <p className="text-[11px] text-muted-foreground text-center pt-1">By placing your order you agree to our terms.</p>
           </aside>
