@@ -33,6 +33,20 @@ function cleanParameter(value: string): string {
   return value.replace(/[^a-zA-Z0-9.@]/g, "");
 }
 
+function maskSecret(value: string, visible = 4): string {
+  if (!value) return "(empty)";
+  if (value.length <= visible) return "***";
+  return `${value.slice(0, visible)}***(${value.length})`;
+}
+
+function logUpiDebug(scope: string, message: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.log(`[${scope}] ${message}`, details);
+    return;
+  }
+  console.log(`[${scope}] ${message}`);
+}
+
 // ---------------------------------------------------------------------------
 // Input schemas
 // ---------------------------------------------------------------------------
@@ -75,6 +89,14 @@ export const initiateUpiPayment = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase } = context;
     const cfg = getUpiConfig();
+
+    logUpiDebug("initiateUpiPayment", "Config loaded", {
+      apiUrl:    cfg.apiUrl || "(empty)",
+      statusUrl: cfg.statusUrl || "(empty)",
+      appId:     maskSecret(cfg.appId),
+      walletId:  maskSecret(cfg.walletId),
+      signKey:   maskSecret(cfg.signKey),
+    });
 
     if (!cfg.signKey) {
       throw new Error(
@@ -133,14 +155,35 @@ export const initiateUpiPayment = createServerFn({ method: "POST" })
 
     const sign = generateSignature(params, cfg.signKey);
 
-    const apiRes = await fetch(cfg.apiUrl, {
-      method:  "POST",
-      headers: {
-        sign,
-        "Content-Type": "application/json",
-        "User-Agent":   "ButterbyteStore-UPI/1.0",
-      },
-      body: JSON.stringify(params),
+    logUpiDebug("initiateUpiPayment", "Sending gateway request", {
+      url:             cfg.apiUrl,
+      merchantOrderId: params.merchantOrderId,
+      amount:          params.amount,
+      appId:           maskSecret(String(params.appId)),
+      walletId:        maskSecret(String(params.walletId)),
+      sign:            maskSecret(sign, 6),
+      params,
+    });
+
+    let apiRes: Response;
+    try {
+      apiRes = await fetch(cfg.apiUrl, {
+        method:  "POST",
+        headers: {
+          sign,
+          "Content-Type": "application/json",
+          "User-Agent":   "ButterbyteStore-UPI/1.0",
+        },
+        body: JSON.stringify(params),
+      });
+    } catch (err) {
+      console.error("[initiateUpiPayment] Network error fetching gateway:", err);
+      throw new Error("Payment gateway is unreachable. Please try again.");
+    }
+
+    logUpiDebug("initiateUpiPayment", "Gateway HTTP response", {
+      status: apiRes.status,
+      ok:     apiRes.ok,
     });
 
     if (!apiRes.ok)
@@ -159,7 +202,20 @@ export const initiateUpiPayment = createServerFn({ method: "POST" })
 
     const body = (await apiRes.json()) as ApiBody;
 
-    if (body.code !== "0000") throw new Error(body.msg ?? "Unknown gateway error");
+    logUpiDebug(
+      "initiateUpiPayment",
+      "Gateway raw response",
+      body as unknown as Record<string, unknown>,
+    );
+
+    if (body.code !== "0000") {
+      console.error("[initiateUpiPayment] Gateway business error:", {
+        code: body.code,
+        msg:  body.msg,
+        data: body.data,
+      });
+      throw new Error(body.msg ?? "Unknown gateway error");
+    }
     if (body.data?.status === "FAIL")
       throw new Error(body.data.errorMsg ?? "Payment initiation failed");
 
@@ -209,6 +265,13 @@ export const checkUpiPaymentStatus = createServerFn({ method: "POST" })
     };
 
     const sign = generateSignature(queryParams, cfg.signKey);
+
+    logUpiDebug("checkUpiPaymentStatus", "Sending status query", {
+      url:             cfg.statusUrl,
+      merchantOrderId: data.merchantOrderId,
+      appId:           maskSecret(queryParams.appId),
+      sign:            maskSecret(sign, 6),
+    });
 
     let apiRes: Response;
     try {
